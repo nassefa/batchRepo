@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:batch="http://www.mulesoft.org/schema/mule/batch"
+	xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+	<salesforce:sfdc-config name="Salesforce_Config" doc:name="Salesforce Config" doc:id="982e8e82-9a93-420e-957b-c1f84198215d" >
+		<salesforce:cached-basic-connection username="${sfdc.username}" password="${sfdc.password}" securityToken="${sfdc.securityToken}" />
+	</salesforce:sfdc-config>
+	<configuration-properties doc:name="Configuration properties" doc:id="e87a750c-cf99-40a0-a83b-7a26b976e6b3" file="mule.Dev.properties" />
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="b745ce4a-4d7c-4771-a28e-18215ce147bf" >
+		<db:my-sql-connection host="${db.host}" port="${db.port}" user="${db.user}" password="${db.password}" database="${db.name}" />
+	</db:config>
+	<flow name="batch_processing_appFlow" doc:id="c040fcc9-a72b-4ec3-a52a-b98333b2b565" >
+		<scheduler doc:name="Scheduler" doc:id="40261b9d-5ff7-4182-9c5c-b564e6fbe1b7" >
+			<scheduling-strategy >
+				<fixed-frequency frequency="${frequency}" startDelay="${startDelay}" timeUnit="SECONDS"/>
+			</scheduling-strategy>
+		</scheduler>
+		<salesforce:query doc:name="Query" doc:id="fe3c93e5-1a8a-4d4f-afcf-49b031bee58d" config-ref="Salesforce_Config">
+			<salesforce:salesforce-query >SELECT Email,FirstName,LastName,LastModifiedDate FROM Contact WHERE LastModifiedDate &gt;:timestamp</salesforce:salesforce-query>
+			<salesforce:parameters ><![CDATA[#[output application/java
+---
+{
+	"timestamp" : (now() - |P1D|) as String
+}]]]></salesforce:parameters>
+		</salesforce:query>
+		<batch:job jobName="batch_processing_appBatch_Job" doc:id="09932bc4-57d2-4e46-a511-101d0e23e36f" >
+			<batch:process-records >
+				<batch:step name="Batch_Step" doc:id="9a6c2d52-9980-404b-8c2e-95e6cded5649" >
+					<db:select doc:name="Select" doc:id="0bc6943f-8348-4d6f-a990-a0f57d493a99" target="recordExists" targetValue="#[payload[0]]" config-ref="Database_Config" transactionalAction="NOT_SUPPORTED">
+						<db:sql >SELECT first_name, last_name, email FROM contact WHERE email= : email</db:sql>
+						<db:input-parameters ><![CDATA[#[{
+	'email': payload.Email
+}]]]></db:input-parameters>
+					</db:select>
+					<ee:transform doc:name="Transform Message" doc:id="51fde782-a44b-4a8c-988c-2681c9fa93c5" >
+						<ee:message >
+							<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"email" : payload.Email,
+	"first_name" : payload.FirstName,
+	"last_name" : payload.LastName,
+	"last_modified" : payload.LastModifiedDate
+}]]></ee:set-payload>
+						</ee:message>
+					</ee:transform>
+					<logger level="INFO" doc:name="Logger" doc:id="855c67f1-ec46-4bfa-bdb4-1dda7425550b" message="This is check select if the record exists"/>
+				</batch:step>
+				<batch:step name="Batch_Step1" doc:id="ce41b650-daa9-4778-aeb8-bce432eab322" acceptExpression="vars.recordExists == null">
+					<db:insert doc:name="Insert" doc:id="205dcf02-208d-416b-8264-9948b3cfeed2" config-ref="Database_Config">
+						<db:sql >INSERT INTO  contact (first_name,last_name,email) Values (:firstName,:lastName,:email)</db:sql>
+						<db:input-parameters ><![CDATA[#[{
+"firstName" : payload.first_name,
+"lastName" : payload.last_name,
+"email" : payload.email
+}]]]></db:input-parameters>
+					</db:insert>
+				</batch:step>
+				<batch:step name="Batch_Step2" doc:id="ca85ea44-440f-47a8-868e-5ee524d5b1b0" acceptExpression="vars.recordExists != null">
+					<db:update doc:name="Update" doc:id="1f258c75-acc7-4c4b-ba08-4ec37bb732f2" config-ref="Database_Config">
+						<db:sql >update contact SET  first_name = :firstName,
+                                   last_name= :lastName
+                                   ,email = :email</db:sql>
+						<db:input-parameters ><![CDATA[#[{
+"firstName" : payload.first_Name,
+"lastName" : payload.last_Name,
+"email" : payload.email
+
+}]]]></db:input-parameters>
+					</db:update>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete >
+				<logger level="INFO" doc:name="Logger" doc:id="514836a6-74b8-40f4-8c94-d2791c5af8bd" message="succseesfully inserted, updated or created"/>
+			</batch:on-complete>
+		</batch:job>
+	</flow>
+</mule>
